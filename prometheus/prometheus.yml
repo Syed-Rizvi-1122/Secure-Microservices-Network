@@ -1,0 +1,22 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: 'apisix'
+    metrics_path: /apisix/prometheus/metrics
+    static_configs:
+      - targets: ['apisix:9091']
+  - job_name: 'users'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['users:5000']
+
+  - job_name: 'products'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['products:5000']
+
+  - job_name: 'orders'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['orders:5000']

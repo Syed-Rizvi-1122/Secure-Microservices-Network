@@ -1,0 +1,11 @@
+flask==3.0.2
+flask-restful==0.3.10
+flask-cors==4.0.0
+
+sqlalchemy==2.0.29
+psycopg2-binary==2.9.11            # OR psycopg2-binary for PostgreSQL
+
+python-dotenv==1.0.1
+requests==2.32.3          # Optional, but useful for service-to-service calls
+gunicorn==22.0.0          # Production server inside docker
+flask_sqlalchemy==3.0.5

@@ -1,0 +1,85 @@
+apisix:
+  node_listen: 9080
+  enable_ipv6: false
+
+  enable_control: true
+  control:
+    ip: "0.0.0.0"
+    port: 9092
+
+deployment:
+  admin:
+    allow_admin:
+      - 0.0.0.0/0       # for testing; restrict later in production
+
+    admin_key:
+      - name: "admin"
+        key: edd1c9f034335f136f87ad84b625c8f1
+        role: admin
+
+      - name: "viewer"
+        key: 4054f7cf07e344346cd3f287985e76a2
+        role: viewer
+
+  etcd:
+    host:
+      - "http://etcd:7000"   # FIXED – real etcd port from docker-compose
+    prefix: "/apisix"
+    timeout: 30
+
+# ============================
+# ENABLE PROMETHEUS PLUGIN HERE
+# ============================
+plugins:
+  - api-breaker
+  - authz-keycloak
+  - basic-auth
+  - batch-requests
+  - consumer-restriction
+  - cors
+  - echo
+  - fault-injection
+  - grpc-transcode
+  - hmac-auth
+  - http-logger
+  - ip-restriction
+  - jwt-auth
+  - kafka-logger
+  - key-auth
+  - limit-conn
+  - limit-count
+  - limit-req
+  - openid-connect
+  - prometheus
+  - proxy-cache
+  - proxy-mirror
+  - proxy-rewrite
+  - redirect
+  - referer-restriction
+  - request-id
+  - request-validation
+  - response-rewrite
+  - serverless-post-function
+  - serverless-pre-function
+  - sls-logger
+  - syslog
+  - tcp-logger
+  - udp-logger
+  - uri-blocker
+  - wolf-rbac
+  - zipkin
+  - server-info
+  - traffic-split
+
+plugin_attr:
+  prometheus:
+    enable_export_server: true
+    export_addr:
+      ip: "0.0.0.0"
+      port: 9091
+
+# Rate limiting configuration (default values for limit-count plugin)
+# These can be overridden per-route via Admin API
+limit_count:
+  rate: 100       # requests per time window
+  time_window: 60 # seconds
