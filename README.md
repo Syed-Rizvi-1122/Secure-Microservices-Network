@@ -1,506 +1,590 @@
-# Distributed Systems Networking -- API Gateway + Microservices + Monitoring
+# Secure Microservices Network
 
-This project demonstrates a **microservices architecture** with **Flask**, **PostgreSQL**, **Docker Compose**, **Apache APISIX** as the API Gateway, and **Prometheus + Grafana** for monitoring and observability.
+**CS4068 — Network Protocols and Standards, Spring 2026**
+**FAST-NUCES Karachi**
 
-## 🚀 **Quick Start (3 Commands)**
+A containerised e-commerce microservices platform with a comprehensive network security layer: **mTLS encryption**, **JWT authentication**, **IDS/IPS**, **attack simulation**, and **live observability**.
 
-```bash
-docker compose down --volumes && docker compose build --no-cache && docker compose up -d
+---
+
+## 📋 Table of Contents
+
+1. [Architecture Overview](#-architecture-overview)
+2. [Prerequisites](#-prerequisites)
+3. [Quick Start (Full Deployment)](#-quick-start-full-deployment)
+4. [Demo Walkthrough for Judge/Teacher](#-demo-walkthrough-for-judgeteacher)
+   - [Module A — End-to-End Encryption (mTLS)](#module-a--end-to-end-encryption-mtls)
+   - [Module B — JWT Authentication & Non-Repudiation](#module-b--jwt-authentication--non-repudiation)
+   - [Module C — Attack Simulation Scripts](#module-c--attack-simulation-scripts)
+   - [Module D — IDS/IPS & Firewall](#module-d--idsips--firewall)
+   - [Observability — Grafana Dashboards](#observability--grafana-dashboards)
+5. [Project Structure](#-project-structure)
+6. [Service Inventory](#-service-inventory)
+7. [Technology Stack](#-technology-stack)
+8. [Course Coverage](#-course-coverage)
+9. [Troubleshooting](#-troubleshooting)
+
+---
+
+## 🏗️ Architecture Overview
+
+The system implements a **defence-in-depth** security model across multiple layers. Every arrow in the diagram below represents an encrypted, mutually-authenticated TLS connection — no plaintext communication exists between any two services.
+
+```
+                    ┌─────────────────────────────────────────────────────┐
+                    │                   EXTERNAL CLIENTS                  │
+                    │            (curl / attack scripts / browser)        │
+                    └──────────────┬──────────────────┬───────────────────┘
+                                   │ HTTP :9080       │ HTTPS :9443
+                    ┌──────────────▼──────────────────▼──────────────────┐
+                    │              APACHE APISIX (Gateway)               │
+                    │   • JWT Authentication (jwt-auth plugin)           │
+                    │   • Rate Limiting (100 req/60s per IP)             │
+                    │   • Static Firewall (ip-restriction plugin)        │
+                    │   • TLS Termination + mTLS to upstreams            │
+                    │   • X-Authenticated-User header injection          │
+                    └───┬──────────┬──────────┬──────────┬───────────────┘
+                        │ mTLS     │ mTLS     │ mTLS     │ mTLS
+                   ┌────▼───┐ ┌────▼───┐ ┌────▼───┐ ┌────▼───┐
+                   │ Users  │ │Products│ │ Orders │ │ Auth   │
+                   │ :5000  │ │ :5000  │ │ :5000  │ │ :5000  │
+                   │ (mTLS) │ │ (mTLS) │ │ (mTLS) │ │(mTLS)  │
+                   │+IDS/IPS│ │+IDS/IPS│ │+IDS/IPS│ │        │
+                   └───┬────┘ └───┬────┘ └───┬────┘ └────────┘
+                       │          │          │
+                   ┌───▼──────────▼──────────▼────┐   ┌──────────┐
+                   │     PostgreSQL (ecommerce)   │   │  Redis   │
+                   │           :5432              │   │  :6379   │
+                   └──────────────────────────────┘   └──────────┘
+                                                      (IDS counters
+                    ┌────────────────────────────────┐ + blocklist)
+                    │  Prometheus :9090 (mTLS scrape)│
+                    │  Grafana    :3000 (8 panels)   │
+                    └────────────────────────────────┘
 ```
 
-Wait ~30 seconds for all services to be ready.
+### How the Security Layers Work Together
 
-------------------------------------------------------------------------
+1. **Layer 1 — Transport Encryption (mTLS):** Every service runs with `ssl.CERT_REQUIRED`. Any caller that doesn't present a certificate signed by our project CA is rejected at the TLS handshake — before any HTTP code runs. This is true mutual TLS: both sides authenticate each other.
 
-## 🐳 **Troubleshooting: Docker Credential Issues**
+2. **Layer 2 — Identity & Access (JWT):** The API gateway validates JWT tokens on every request to protected routes. It extracts the `sub` claim (e.g., `alice`) and injects it as an `X-Authenticated-User` header. The raw token is stripped (`hide_credentials: true`) so Flask services never see it — they trust the gateway's assertion.
 
-If you see errors like `docker-credential-desktop.exe: exec format error`:
+3. **Layer 3 — Intrusion Detection (IDS/IPS):** A Python middleware bind-mounted into each Flask service monitors every request. It uses Redis sliding-window counters to detect rate anomalies, IP spoofing (via `X-Forwarded-For` header inspection), and endpoint hammering. When thresholds are exceeded, it auto-blocks the IP via the APISIX `ip-restriction` plugin, using a Redis distributed lock to prevent race conditions.
+
+4. **Layer 4 — Static Firewall:** Known-bad CIDR ranges (`203.0.113.0/24`, `198.51.100.0/24`, `100.64.0.0/10`) are pre-configured as blocklists on all gateway routes. The IPS dynamic sync merges with these static rules so they're never accidentally removed.
+
+---
+
+## ✅ Prerequisites
+
+| Requirement | Version |
+|---|---|
+| **Docker Desktop** (with WSL 2 backend) | Latest |
+| **WSL 2** (Ubuntu) | 22.04+ |
+| **openssl** (in WSL) | Any |
+| **Python 3** (in WSL, for attack scripts) | 3.8+ |
+
+Set up the Python virtual environment for attack scripts:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install requests==2.31.0 scapy==2.5.0 PyJWT==2.8.0
+```
+
+---
+
+## 🚀 Quick Start (Full Deployment)
+
+Run these commands **in WSL**, from the project root:
 
 ```bash
-cat ~/.docker/config.json
-cp ~/.docker/config.json ~/.docker/config.json.bak
+# Step 1: Generate TLS certificates (CA + 6 service certs)
+bash certs/generate-certs.sh
+
+# Step 2: Build all Docker images and start 11 containers
+docker compose build --no-cache && docker compose up -d
+
+# Step 3: Wait for all services to be ready (~45 seconds)
+sleep 45
+
+# Step 4: Configure the API Gateway (routes, JWT, firewall)
+bash init-gateway.sh
+
+# Step 5: Verify all services are running
+docker compose ps
+```
+
+You should see **11 services** all in `running` state.
+
+---
+
+## 🎓 Demo Walkthrough for Judge/Teacher
+
+> **This section is designed as a step-by-step demo script.** Each module starts with a conceptual explanation of *what* and *why*, followed by hands-on commands with expected outputs. Follow in order.
+
+> **Important:** Activate the virtual environment before running attack scripts:
+> ```bash
+> source .venv/bin/activate
+> ```
+
+---
+
+### Module A — End-to-End Encryption (mTLS)
+
+#### 💡 What This Demonstrates
+
+**Mutual TLS (mTLS)** extends standard TLS by requiring *both* sides of a connection to present certificates. In standard HTTPS, only the server proves its identity. With mTLS, the client must also prove who it is — if it can't, the connection is rejected at the TCP/TLS handshake level, before any application code executes.
+
+This is critical in microservices because services communicate over a shared Docker network. Without mTLS, any container on that network could impersonate a legitimate service. With mTLS, every service must present a certificate signed by our project CA (`NPS-Project-CA`), ensuring that only authorised services can communicate.
+
+**Course relevance:** Week 12 (CIA Triad — Confidentiality), Week 13 (SSL/TLS)
+
+#### A1. Verify HTTPS works through the gateway
+
+```bash
+curl -k https://localhost:9443/users/health
+```
+**Expected:** `{"status":"ok"}` — The `-k` flag skips certificate verification (self-signed), but the connection IS encrypted with TLS 1.2/1.3.
+
+#### A2. Verify HTTP still works (backward compatibility)
+
+```bash
+curl http://localhost:9080/users/health
+```
+**Expected:** `{"status":"ok"}` — Both HTTP and HTTPS are available at the gateway level.
+
+#### A3. Prove mTLS is enforced at the Flask service level
+
+This is the key test — it proves that Flask services reject connections without a valid client certificate:
+
+```bash
+curl -k https://localhost:5001/users
+```
+**Expected:** Connection **fails with a TLS handshake error** (curl exit code 56), NOT an HTTP error code. This proves the Flask server's `ssl.CERT_REQUIRED` setting works — the connection is killed at the socket level before any Python code runs. Only callers with a certificate signed by our CA (like APISIX or Prometheus) can connect.
+
+#### A4. Show the certificate chain
+
+```bash
+# Verify CA identity
+openssl x509 -in certs/ca.crt -noout -subject
+# Expected: subject=CN = NPS-Project-CA
+
+# Verify a service cert is signed by our CA
+openssl verify -CAfile certs/ca.crt certs/users.crt
+# Expected: certs/users.crt: OK
+
+# List all certificates
+ls certs/*.crt
+# Expected: apisix.crt, auth.crt, ca.crt, orders.crt, products.crt, prometheus.crt, users.crt
+```
+
+---
+
+### Module B — JWT Authentication & Non-Repudiation
+
+#### 💡 What This Demonstrates
+
+**JWT (JSON Web Tokens)** provide stateless authentication. When a user logs in via `POST /auth/token`, the Auth service creates a digitally signed token containing the user's identity (`sub` claim). This token is sent with every subsequent request.
+
+The API gateway validates the token's signature using the shared secret (`nps-project-secret-2026`), extracts the `sub` claim, and injects it as an `X-Authenticated-User` header. The raw token is then **stripped** before the request reaches Flask — this is a security best practice called "credential hiding".
+
+**Non-repudiation** means a user cannot deny having performed an action. Because every request is tagged with the authenticated user's identity in Prometheus metrics, we have a cryptographically-linked audit trail. The `subject` label on `flask_http_requests_total` proves exactly *who* made *what* request and *when*.
+
+**Course relevance:** Week 12 (Authentication, Non-Repudiation)
+
+#### B1. Obtain a JWT token
+
+```bash
+curl -s -X POST http://localhost:9080/auth/token \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"alice","password":"password123"}'
+```
+**Expected:** `{"token":"eyJ...","expires_in":3600}` — A 3600-second (1 hour) JWT token.
+
+#### B2. Verify unauthenticated requests are rejected
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" http://localhost:9080/users
+```
+**Expected:** `401` — The gateway's `jwt-auth` plugin rejects requests without a valid token.
+
+#### B3. Access protected endpoints with a valid token
+
+```bash
+# Store token in a variable
+TOKEN=$(curl -s -X POST http://localhost:9080/auth/token \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"alice","password":"password123"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
+
+# Use token to access protected endpoints
+curl -s http://localhost:9080/users -H "Authorization: Bearer $TOKEN"
+curl -s http://localhost:9080/products -H "Authorization: Bearer $TOKEN"
+curl -s http://localhost:9080/orders -H "Authorization: Bearer $TOKEN"
+```
+**Expected:** HTTP 200 with JSON data from each service.
+
+#### B4. Create data through the gateway
+
+```bash
+# Create a user
+curl -s -X POST http://localhost:9080/users \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Alice","email":"alice@example.com"}'
+
+# Create a product
+curl -s -X POST http://localhost:9080/products \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Laptop","price":999.99}'
+
+# Place an order
+curl -s -X POST http://localhost:9080/orders \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":1,"product_id":1,"quantity":2}'
+```
+
+#### B5. Verify non-repudiation (subject label in Prometheus)
+
+This is the proof of non-repudiation — every request is permanently linked to the authenticated user:
+
+```bash
+# Make requests as alice and bob
+for i in {1..5}; do
+  curl -s http://localhost:9080/users -H "Authorization: Bearer $TOKEN" > /dev/null
+done
+
+BOB_TOKEN=$(curl -s -X POST http://localhost:9080/auth/token \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"bob","password":"securepass"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
+
+for i in {1..5}; do
+  curl -s http://localhost:9080/products -H "Authorization: Bearer $BOB_TOKEN" > /dev/null
+done
+
+# Wait for Prometheus to scrape, then query
+sleep 10
+curl -s 'http://localhost:9090/api/v1/query?query=flask_http_requests_total{subject=~"alice|bob"}' | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for r in data.get('data',{}).get('result',[]):
+    m = r['metric']
+    print(f\"  service={m.get('service','?'):10s} subject={m.get('subject','?'):10s} count={r['value'][1]}\")
+"
+```
+**Expected:** Non-zero counts for both `alice` and `bob` — proving every request is traceable to its authenticated user.
+
+#### B6. Verify token via /auth/verify endpoint
+
+```bash
+curl -s http://localhost:9080/auth/verify -H "Authorization: Bearer $TOKEN"
+```
+**Expected:** `{"sub":"alice","valid":true}` — Confirms the token is valid and belongs to alice.
+
+#### B7. Test invalid credentials
+
+```bash
+curl -s -X POST http://localhost:9080/auth/token \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"alice","password":"wrongpassword"}'
+```
+**Expected:** HTTP 401 — `{"error":"Invalid credentials"}`
+
+---
+
+### Module C — Attack Simulation Scripts
+
+#### 💡 What This Demonstrates
+
+These scripts simulate real-world network attacks from the WSL host (outside Docker), targeting the gateway. They demonstrate the attack vectors discussed in Week 13:
+
+- **SYN Flood** (transport layer): Sends raw TCP SYN packets with forged source IPs. These packets never complete the three-way handshake, consuming server resources. Requires raw sockets (`sudo`).
+- **IP Spoofing** (network layer): Injects forged IP addresses via HTTP headers (`X-Forwarded-For`, `X-Real-IP`). The IDS middleware detects these forged private/test-range IPs.
+- **Brute Force** (application layer): Systematically tries username/password combinations against the auth endpoint, simulating a credential-stuffing attack.
+
+**Course relevance:** Week 13 (SYN Flooding, IP Spoofing, Session Hijacking)
+
+> **Remember:** Activate the venv first: `source .venv/bin/activate`
+
+#### C1. Brute Force Attack
+
+```bash
+python3 attack_scripts/brute_force.py
+```
+**Expected:**
+- 15 credential pairs tested
+- Exactly **3 `[SUCCESS]`** results (alice, bob, admin)
+- **12 `[FAIL]`** results
+- Summary: "Valid credentials found: 3"
+
+#### C2. IP Spoofing Attack
+
+```bash
+python3 attack_scripts/ip_spoof.py --count 5
+```
+**Expected:**
+- 5 requests with forged IP headers from private/test ranges
+- Each line shows the forged IP and HTTP status code
+- After running this, IDS logs will show spoofing detection warnings
+
+#### C3. SYN Flood Attack (requires sudo)
+
+```bash
+sudo python3 attack_scripts/syn_flood.py --count 50
+```
+**Expected:** 50 SYN packets sent with randomised source IPs, progress every 50 packets.
+
+> **Note:** SYN packets operate below the HTTP layer, so they won't appear in Grafana's HTTP metrics. This is expected — the attack demonstrates a transport-layer concept.
+
+#### C3b. Verify graceful no-root handling
+
+```bash
+python3 attack_scripts/syn_flood.py
+```
+**Expected:** Prints error about needing root privileges and exits cleanly (no crash/traceback).
+
+---
+
+### Module D — IDS/IPS & Firewall
+
+#### 💡 What This Demonstrates
+
+The **IDS (Intrusion Detection System)** is a Python middleware (`ids/ids_middleware.py`) bind-mounted into each Flask service. It runs as a `before_request` hook, inspecting every inbound request before application logic executes. It uses **Redis sliding-window counters** (not fixed time buckets) to track request rates per IP.
+
+The IDS detects three types of threats:
+1. **Rate anomaly:** IP exceeds 80 requests/60s (alert) or 120 requests/60s (block)
+2. **IP spoofing:** `X-Forwarded-For` header contains IPs from private/test ranges
+3. **Endpoint hammering:** Same IP hits same path >60 times in 60s
+
+When the block threshold (120 req/60s) is reached, the IDS promotes to **IPS (Intrusion Prevention)**: it adds the IP to a Redis blocklist (`ids:global:blocklist`) using atomic `SADD`, then syncs the blocklist to all 6 APISIX routes via a **distributed lock** (`ids:lock:apisix_sync`, 5s TTL) to prevent race conditions between concurrent service instances.
+
+The **static firewall** pre-blocks known-bad CIDR ranges at the gateway using APISIX's `ip-restriction` plugin. The IPS sync always merges dynamic blocks with these static rules.
+
+**Course relevance:** Week 14 (Firewalls, IDS/IPS, Proxy Servers)
+
+#### D1. Verify IDS detects the IP spoofing attack
+
+After running the attack scripts (Module C), check the Flask service logs:
+
+```bash
+docker logs secure-microservices-network-users-1 2>&1 | grep -E "\[IDS\]|\[IPS\]" | tail -10
+```
+**Expected:** `[IDS] WARNING` lines showing "IP spoofing detected" with the forged IP range.
+
+#### D2. Verify Redis stores IDS sliding-window counters
+
+```bash
+docker exec secure-microservices-network-redis-1 redis-cli keys "ids:*"
+```
+**Expected:** Keys matching `ids:rate:<ip>` and `ids:ep:<ip>:<path>` — these are the sliding-window sorted sets.
+
+#### D3. Verify static firewall CIDRs are configured
+
+The firewall operates on the **real source IP** (`remote_addr`), not on spoofable headers like `X-Forwarded-For` — this is by design, otherwise attackers could bypass the firewall by simply not sending that header. To verify the firewall is configured:
+
+```bash
+# Check the ip-restriction plugin on a route
+curl -s http://localhost:9180/apisix/admin/routes/users_root \
+  -H "X-API-KEY: edd1c9f034335f136f87ad84b625c8f1" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+bl = d.get('value',{}).get('plugins',{}).get('ip-restriction',{}).get('blacklist',[])
+print(f'Blocked CIDRs: {bl}')
+"
+```
+**Expected:** `['203.0.113.0/24', '198.51.100.0/24', '100.64.0.0/10']` — Three CIDR ranges blocked on all 6 routes.
+
+#### D4. Test rate limiting (100 req/60s per IP)
+
+```bash
+for i in $(seq 1 105); do
+  CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:9080/users \
+    -H "Authorization: Bearer $TOKEN")
+  if [ "$CODE" == "429" ]; then
+    echo "Rate limited at request $i (HTTP 429)"
+    break
+  fi
+done
+```
+**Expected:** Rate limit hit around request 100 with HTTP `429 Too Many Requests`.
+
+#### D5. Trigger IPS auto-block (optional — long-running)
+
+```bash
+# Send enough requests to exceed IDS_BLOCK_AT (120 req/60s)
+for i in $(seq 1 130); do
+  curl -s http://localhost:9080/users -H "Authorization: Bearer $TOKEN" > /dev/null
+done
+
+# Check if the IP was auto-blocked
+docker exec secure-microservices-network-redis-1 redis-cli smembers ids:global:blocklist
+```
+**Expected:** The source IP appears in the Redis blocklist. Check logs for `[IPS] Blocked IP ...` messages.
+
+---
+
+### Observability — Grafana Dashboards
+
+#### 💡 What This Demonstrates
+
+Prometheus scrapes metrics from all Flask services **over mTLS** — it presents its own certificate (`prometheus.crt`) and verifies each service's certificate against the project CA. This means even the monitoring pipeline is encrypted and authenticated.
+
+Grafana visualises these metrics in real-time. The 4 new security panels show the impact of attacks and authentication patterns, while the original 4 panels continue to show application-level metrics.
+
+**Course relevance:** Week 7 (Data Centre Networking), Week 10 (Microservice Architecture)
+
+#### Open Grafana
+
+```
+URL:   http://localhost:3000
+Login: admin / admin
+Path:  Dashboards → Flask Services Monitoring
+```
+
+#### 8 Dashboard Panels
+
+**Original 4 panels (baseline application metrics):**
+1. **Service Requests Per Second** — line chart of request throughput
+2. **Service Request Latency (p95, p99)** — latency percentiles
+3. **HTTP Status Codes by Service** — distribution of response codes
+4. **Total Requests by Service** — pie chart breakdown
+
+**New 4 panels (security modules):**
+5. **IDS/IPS — Rate-Limited Requests** — stat panel showing HTTP 429 count (attack indicator)
+6. **Auth — Token Success vs Failure Rate** — timeseries (green=200, red=401) showing brute-force impact
+7. **Requests by JWT Subject (Non-Repudiation)** — pie chart showing request distribution per authenticated user
+8. **Error Rate 4xx+5xx (Attack Indicator)** — timeseries showing error spikes by service during attacks
+
+#### Verify Prometheus targets
+
+```bash
+curl -s 'http://localhost:9090/api/v1/targets' | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for t in data['data']['activeTargets']:
+    print(f\"  {t['labels']['job']:12s} → {t['health']}\")
+"
+```
+**Expected:** All 5 targets (`apisix`, `users`, `products`, `orders`, `auth`) show `up`.
+
+---
+
+## 📂 Project Structure
+
+```
+Secure-Microservices-Network/
+├── certs/
+│   └── generate-certs.sh              # TLS certificate generator (CA + 6 service certs)
+├── flask/
+│   ├── users/     (app.py, Dockerfile, requirements.txt)    # Users microservice
+│   ├── products/  (app.py, Dockerfile, requirements.txt)    # Products microservice
+│   ├── orders/    (app.py, Dockerfile, requirements.txt)    # Orders microservice
+│   └── auth/      (app.py, Dockerfile, requirements.txt)    # Auth microservice (NEW)
+├── ids/
+│   └── ids_middleware.py               # IDS/IPS middleware (bind-mounted, not baked)
+├── attack_scripts/
+│   ├── syn_flood.py                    # SYN flood simulation (requires sudo)
+│   ├── ip_spoof.py                     # IP spoofing simulation
+│   └── brute_force.py                  # Brute-force credential attack
+├── apisix_conf/config.yaml             # APISIX config with SSL + trusted CA
+├── dashboard_conf/conf.yaml            # APISIX Dashboard config (DO NOT MODIFY)
+├── db/init.sql                         # PostgreSQL schema (DO NOT MODIFY)
+├── prometheus/prometheus.yml           # Prometheus config with mTLS scraping
+├── grafana/provisioning/
+│   ├── datasources/prometheus.yml
+│   └── dashboards/
+│       ├── services-monitoring.json    # Flask dashboard (8 panels)
+│       └── apisix-dashboard.json       # APISIX dashboard
+├── docker-compose.yml                  # 11 services, 4 volumes, 1 network
+├── init-gateway.sh                     # Post-startup APISIX configuration (7 steps)
+└── README.md                           # This file
+```
+
+---
+
+## 🐳 Service Inventory
+
+| Service | Port (Host) | Purpose |
+|---|---|---|
+| `apisix` | 9080 (HTTP), 9443 (HTTPS), 9180 (admin), 9091 (metrics) | API Gateway |
+| `apisix-dashboard` | 9000 | Gateway admin UI |
+| `etcd` | 7000 | APISIX config store |
+| `db` | 5432 | PostgreSQL database |
+| `redis` | 6379 | IDS rate counters + blocklist |
+| `users` | 5001 | Users microservice (mTLS + IDS) |
+| `products` | 5002 | Products microservice (mTLS + IDS) |
+| `orders` | 5003 | Orders microservice (mTLS + IDS) |
+| `auth` | 5004 | JWT auth microservice (mTLS) |
+| `prometheus` | 9090 | Metrics collection (mTLS scraping) |
+| `grafana` | 3000 | Dashboard UI (admin/admin) |
+
+---
+
+## 📚 Technology Stack
+
+| Component | Technology | Security Role |
+|---|---|---|
+| API Gateway | Apache APISIX | JWT enforcement, rate limiting, firewall, TLS termination |
+| Microservices | Flask 2.3 (Python 3.11) | mTLS server, subject logging, IDS middleware |
+| Database | PostgreSQL 15 | Application data persistence |
+| Cache/State | Redis 7 | IDS sliding-window counters, global blocklist, distributed lock |
+| Auth | PyJWT + HS256 | Token issuing/verification |
+| Monitoring | Prometheus + Grafana | mTLS-secured scraping, 8-panel dashboard |
+| Encryption | OpenSSL (self-signed CA) | mTLS between all services |
+| Orchestration | Docker Compose v2 | 11 containers, bridge network |
+
+---
+
+## 📊 Course Coverage
+
+| Week | Topics | Project Component |
+|---|---|---|
+| 1 | Network Applications, Protocol Layers | HTTP/HTTPS as application-layer protocol across all services |
+| 7 | Data Centre Networking, Middleboxes | APISIX as North–South gateway; inter-service calls as East–West traffic |
+| 9 | Cloud Deployment (Private Cloud) | Docker Compose as self-hosted private cloud environment |
+| 10 | VMs vs. Containers, Microservices | 4 independently containerised Flask services; IDS as side-loaded module |
+| 12 | CIA Triad, Authentication, Non-Repudiation | HTTPS/mTLS (Confidentiality); JWT subject logging (Non-Repudiation) |
+| 13 | SSL/TLS, SYN Flooding, IP Spoofing | mTLS between all services; 3 attack simulation scripts |
+| 14 | Firewalls, IDS/IPS, Proxy Servers | ip-restriction as static firewall; IDS middleware; IPS auto-blocking |
+
+---
+
+## 🛠️ Troubleshooting
+
+### Docker credential issues
+```bash
 echo '{}' > ~/.docker/config.json
 docker compose build --no-cache
 ```
 
-------------------------------------------------------------------------
-
-## 📊 **View Live Metrics (After Starting)**
-
-Once containers are running, access the dashboards:
-
-### **1. Grafana** (Service-level metrics with histograms & latency)
-```
-URL: http://localhost:3000
-Login: admin / admin
-Navigate: Dashboards → Flask Services Monitoring
-```
-
-### **2. Prometheus** (Raw metrics query interface)
-```
-URL: http://localhost:9090
-Example query: flask_http_requests_total
-```
-
-### **3. APISIX Dashboard** (API Gateway admin)
-```
-URL: http://localhost:9000
-Login: admin / admin
-```
-
-------------------------------------------------------------------------
-
-## 🔧 **APISIX Setup & Routing Configuration**
-
-After `docker compose up -d` succeeds, configure APISIX upstreams and routes for all service endpoints and health checks.
-
-### **Working Gateway Endpoints**
-
-**Service API:**
-- `POST /users` → users service
-- `POST /products` → products service
-- `POST /orders` → orders service
-- `GET /users`, `GET /products`, `GET /orders` (if implemented)
-
-**Health Checks:**
-- `GET /users/health` → users service `/health`
-- `GET /products/health` → products service `/health`
-- `GET /orders/health` → orders service `/health`
-
-**Wildcard Routes (Path Rewriting):**
-- `/users/*` → `/` on users backend (e.g., `/users/health` → `/health`)
-- `/products/*` → `/` on products backend
-- `/orders/*` → `/` on orders backend
-
-**Rate Limiting & Retries:**
-- All routes have rate limiting (100 req/60s per IP) and retries (2 attempts, 2s timeout)
-
-### **How APISIX Is Configured**
-
-Upstreams:
+### Certificates not found
 ```bash
-curl -X PUT "http://localhost:9180/apisix/admin/upstreams/users_upstream" \
-  -H "X-API-KEY: edd1c9f034335f136f87ad84b625c8f1" \
-  -H "Content-Type: application/json" \
-  -d '{"type": "roundrobin", "nodes": {"users:5000": 1}, "retries": 2, "retry_timeout": 2}'
-curl -X PUT "http://localhost:9180/apisix/admin/upstreams/products_upstream" \
-  -H "X-API-KEY: edd1c9f034335f136f87ad84b625c8f1" \
-  -H "Content-Type: application/json" \
-  -d '{"type": "roundrobin", "nodes": {"products:5000": 1}, "retries": 2, "retry_timeout": 2}'
-curl -X PUT "http://localhost:9180/apisix/admin/upstreams/orders_upstream" \
-  -H "X-API-KEY: edd1c9f034335f136f87ad84b625c8f1" \
-  -H "Content-Type: application/json" \
-  -d '{"type": "roundrobin", "nodes": {"orders:5000": 1}, "retries": 2, "retry_timeout": 2}'
+bash certs/generate-certs.sh
+docker compose restart
 ```
 
-Root routes:
+### Gateway routes not configured
 ```bash
-curl -X PUT "http://localhost:9180/apisix/admin/routes/users_root" \
-  -H "X-API-KEY: edd1c9f034335f136f87ad84b625c8f1" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "users_root", "uri": "/users", "methods": ["POST","GET"], "upstream_id": "users_upstream", "plugins": {"limit-count": {"count": 100, "time_window": 60, "rejected_code": 429, "key": "remote_addr", "policy": "local"}}}'
-curl -X PUT "http://localhost:9180/apisix/admin/routes/products_root" \
-  -H "X-API-KEY: edd1c9f034335f136f87ad84b625c8f1" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "products_root", "uri": "/products", "methods": ["POST","GET"], "upstream_id": "products_upstream", "plugins": {"limit-count": {"count": 100, "time_window": 60, "rejected_code": 429, "key": "remote_addr", "policy": "local"}}}'
-curl -X PUT "http://localhost:9180/apisix/admin/routes/orders_root" \
-  -H "X-API-KEY: edd1c9f034335f136f87ad84b625c8f1" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "orders_root", "uri": "/orders", "methods": ["POST","GET"], "upstream_id": "orders_upstream", "plugins": {"limit-count": {"count": 100, "time_window": 60, "rejected_code": 429, "key": "remote_addr", "policy": "local"}}}'
+# Idempotent — safe to run multiple times
+bash init-gateway.sh
 ```
 
-Wildcard routes with path rewriting:
+### Prometheus targets showing "down"
 ```bash
-curl -X PUT "http://localhost:9180/apisix/admin/routes/users_wildcard" \
-  -H "X-API-KEY: edd1c9f034335f136f87ad84b625c8f1" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "users_wildcard", "uri": "/users/*", "upstream_id": "users_upstream", "plugins": {"proxy-rewrite": {"regex_uri": ["^/users/(.*)", "/$1"]}, "limit-count": {"count": 100, "time_window": 60, "rejected_code": 429, "key": "remote_addr", "policy": "local"}}}'
-curl -X PUT "http://localhost:9180/apisix/admin/routes/products_wildcard" \
-  -H "X-API-KEY: edd1c9f034335f136f87ad84b625c8f1" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "products_wildcard", "uri": "/products/*", "upstream_id": "products_upstream", "plugins": {"proxy-rewrite": {"regex_uri": ["^/products/(.*)", "/$1"]}, "limit-count": {"count": 100, "time_window": 60, "rejected_code": 429, "key": "remote_addr", "policy": "local"}}}'
-curl -X PUT "http://localhost:9180/apisix/admin/routes/orders_wildcard" \
-  -H "X-API-KEY: edd1c9f034335f136f87ad84b625c8f1" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "orders_wildcard", "uri": "/orders/*", "upstream_id": "orders_upstream", "plugins": {"proxy-rewrite": {"regex_uri": ["^/orders/(.*)", "/$1"]}, "limit-count": {"count": 100, "time_window": 60, "rejected_code": 429, "key": "remote_addr", "policy": "local"}}}'
+docker exec secure-microservices-network-prometheus-1 ls /certs/
+# Should show: ca.crt, prometheus.crt, prometheus.key
 ```
 
-**Test health endpoints:**
+### Full reset
 ```bash
-curl -s http://localhost:9080/users/health
-curl -s http://localhost:9080/products/health
-curl -s http://localhost:9080/orders/health
-# All should return OK
+docker compose down --volumes
+bash certs/generate-certs.sh
+docker compose build --no-cache && docker compose up -d
+sleep 45
+bash init-gateway.sh
 ```
 
-**Test API endpoints:**
-```bash
-curl -X POST http://localhost:9080/users -H 'Content-Type: application/json' -d '{"name":"UserTest","email":"usertest@test.com"}'
-curl -X POST http://localhost:9080/products -H 'Content-Type: application/json' -d '{"name":"ProductTest","price":123}'
-curl -X POST http://localhost:9080/orders -H 'Content-Type: application/json' -d '{"user_id":1,"product_id":1,"quantity":2}'
-```
+---
 
-**Rate limiting and retries are active on all routes.**
-
-------------------------------------------------------------------------
-
-## 🧪 **Generate Traffic & View Metrics (Step-by-Step)**
-
-### **Step 1: Send Sample Requests**
-
-```bash
-# Create 5 users
-for i in {1..5}; do
-  curl -X POST http://localhost:9080/users \
-    -H 'Content-Type: application/json' \
-    -d "{\"name\":\"User$i\",\"email\":\"user$i@test.com\"}"
-done
-
-# Create 3 products
-for i in {1..3}; do
-  curl -X POST http://localhost:9080/products \
-    -H 'Content-Type: application/json' \
-    -d "{\"name\":\"Product$i\",\"price\":$((i * 100))}"
-done
-
-# Create 2 orders
-for i in {1..2}; do
-  curl -X POST http://localhost:9080/orders \
-    -H 'Content-Type: application/json' \
-    -d "{\"user_id\":1,\"product_id\":$i,\"quantity\":$i}"
-done
-```
-
-### **Step 2: Verify Metrics Collection**
-
-Check that Prometheus is scraping the services:
-
-```bash
-curl -s 'http://localhost:9090/api/v1/targets' | jq '.data.activeTargets[] | {job: .labels.job, state: .health}'
-```
-
-Expected output:
-```json
-{ "job": "apisix", "state": "up" }
-{ "job": "users", "state": "up" }
-{ "job": "products", "state": "up" }
-{ "job": "orders", "state": "up" }
-```
-
-### **Step 3: View Dashboard**
-
-1. Open **Grafana**: http://localhost:3000
-2. Login with `admin` / `admin`
-3. Click **Dashboards** (left sidebar)
-4. Select **Flask Services Monitoring**
-5. You should see:
-   - **Service Requests Per Second** — line chart with traffic
-   - **Service Request Latency (p95, p99)** — latency percentiles
-   - **HTTP Status Codes by Service** — 2xx/4xx/5xx distribution
-   - **Total Requests by Service** — pie chart
-
-------------------------------------------------------------------------
-
-## 📊 **Monitoring Architecture**
-
-### **Service Instrumentation**
-
-Each Flask service (`users`, `products`, `orders`) exports Prometheus metrics:
-
-- **`flask_http_requests_total`** — Counter of HTTP requests by service, method, endpoint, and HTTP status
-- **`flask_request_latency_seconds`** — Histogram of request latency (enables p95/p99 calculations)
-- **Metrics endpoint**: `http://<service>:5000/metrics`
-
-### **Prometheus Configuration**
-
-Configured to scrape:
-- `apisix:9091/apisix/prometheus/metrics` — APISIX gateway metrics
-- `users:5000/metrics` — Users service metrics
-- `products:5000/metrics` — Products service metrics
-- `orders:5000/metrics` — Orders service metrics
-
-### **Accessing Prometheus & Query Examples**
-
-#### **Step 1: Open Prometheus**
-1. Open your browser and go to: `http://localhost:9090`
-2. You should see the Prometheus query interface with a search bar
-
-#### **Step 2: Run Queries in Prometheus**
-
-Copy and paste these queries into the search bar and press Enter:
-
-**Query 1: Requests Per Second by Service**
-```promql
-sum(rate(flask_http_requests_total[1m])) by (service)
-```
-This shows how many requests per second each service is handling.
-
-**Query 2: Request Latency (p95 percentile)**
-```promql
-histogram_quantile(0.95, sum(rate(flask_request_latency_seconds_bucket[5m])) by (le, service))
-```
-Shows 95th percentile response time for each service (0.95 = 95%).
-
-**Query 3: Request Latency (p99 percentile)**
-```promql
-histogram_quantile(0.99, sum(rate(flask_request_latency_seconds_bucket[5m])) by (le, service))
-```
-Shows 99th percentile response time (slowest 1% of requests).
-
-**Query 4: Error Rate (4xx + 5xx) Per Service**
-```promql
-sum(rate(flask_http_requests_total{http_status=~"(4|5).."}[1m])) by (service)
-```
-Shows errors per second for each service.
-
-**Query 5: Total Requests by Endpoint**
-```promql
-sum(increase(flask_http_requests_total[5m])) by (endpoint, service)
-```
-Shows total request count per endpoint in the last 5 minutes.
-
-**Query 6: Active APISIX Connections**
-```promql
-apisix_nginx_http_current_connections{state="active"}
-```
-Shows currently active connections on the APISIX gateway.
-
-#### **Step 3: View Query Results**
-- Results appear in two tabs: **Table** (numerical data) and **Graph** (time-series visualization)
-- Click the **Graph** tab to see a line chart over time
-- Hover over the graph to see exact values at specific times
-
-### **Grafana Dashboards**
-
-#### **Step 1: Open Grafana**
-1. Open your browser and go to: `http://localhost:3000`
-2. You'll see the Grafana login page
-3. Login with:
-   - **Username**: `admin`
-   - **Password**: `admin`
-
-#### **Step 2: Navigate to Dashboards**
-1. Click the **Dashboards** icon (grid icon) in the left sidebar
-2. Click **Browse** or **View all dashboards**
-3. You should see two pre-provisioned dashboards:
-   - **APISIX Gateway Monitoring**
-   - **Flask Services Monitoring**
-
-#### **Step 3: View Flask Services Monitoring Dashboard**
-1. Click on **Flask Services Monitoring**
-2. You will see four panels:
-   - **Service Requests Per Second** — Line chart showing RPS trends for each service
-   - **Service Request Latency (p95, p99)** — Shows 95th and 99th percentile latencies
-   - **HTTP Status Codes by Service** — Stacked bar chart showing 2xx/4xx/5xx breakdown
-   - **Total Requests by Service** — Pie chart showing request volume distribution
-
-#### **Step 4: View APISIX Gateway Monitoring Dashboard**
-1. Go back to Dashboards and click on **APISIX Gateway Monitoring**
-2. This dashboard shows:
-   - **Active Connections** — Current active connections to APISIX
-   - **etcd Health** — Status of the configuration store
-   - **Plugin Status** — Enabled plugins on routes
-   - **HTTP Requests Total** — Overall request volume
-
-#### **Step 5: Customize Dashboards (Optional)**
-1. Click the **Edit** button (pencil icon) in the top right
-2. Click on any panel to modify its query or settings
-3. Click **Save** to persist changes
-
-#### **Generate Live Traffic to See Metrics**
-
-Run this command to generate continuous traffic:
-```bash
-# Generate 15 minutes of random traffic
-for i in {1..180}; do
-  sleep $((RANDOM % 5 + 2))  # Random 2-7 second delay
-  curl -X POST http://localhost:9080/users -H 'Content-Type: application/json' -d "{\"name\":\"User$((RANDOM % 1000))\",\"email\":\"user$((RANDOM % 1000))@test.com\"}" > /dev/null 2>&1 &
-  curl -X POST http://localhost:9080/products -H 'Content-Type: application/json' -d "{\"name\":\"Product$((RANDOM % 100))\",\"price\":$((RANDOM % 500 + 10))}" > /dev/null 2>&1 &
-  curl -X POST http://localhost:9080/orders -H 'Content-Type: application/json' -d "{\"user_id\":$((RANDOM % 10 + 1)),\"product_id\":$((RANDOM % 5 + 1)),\"quantity\":$((RANDOM % 5 + 1))}" > /dev/null 2>&1 &
-done
-```
-
-Then:
-1. Switch to Grafana and watch the **Flask Services Monitoring** dashboard update in real-time
-2. Switch to Prometheus and run queries to see live metrics
-3. Return to Grafana to see latency percentiles and error rates populate
-
-------------------------------------------------------------------------
-
-## 🗄️ **Database & Data Verification**
-
-### **Access PostgreSQL**
-
-```bash
-docker exec -it distributed-systems-networking-db-1 psql -U postgres -d ecommerce
-```
-
-### **Check Tables**
-
-```sql
-SELECT * FROM users;
-SELECT * FROM products;
-SELECT * FROM orders;
-```
-
-### **Exit PostgreSQL**
-
-```
-\q
-```
-
-------------------------------------------------------------------------
-
-## 📂 **Project Structure**
-
-```
-.
-├── docker-compose.yml              # Service orchestration (APISIX, services, DB, Prometheus, Grafana)
-├── flask/
-│   ├── users/
-│   │   ├── app.py                 # Users microservice with Prometheus instrumentation
-│   │   ├── Dockerfile
-│   │   └── requirements.txt
-│   ├── products/
-│   │   ├── app.py                 # Products microservice with Prometheus instrumentation
-│   │   ├── Dockerfile
-│   │   └── requirements.txt
-│   └── orders/
-│       ├── app.py                 # Orders microservice with Prometheus instrumentation
-│       ├── Dockerfile
-│       └── requirements.txt
-├── db/
-│   └── init.sql                   # PostgreSQL schema (auto-initialized)
-├── apisix_conf/
-│   └── config.yaml                # APISIX configuration with Prometheus plugin enabled
-├── dashboard_conf/
-│   └── conf.yaml                  # APISIX Dashboard configuration
-├── prometheus/
-│   └── prometheus.yml             # Prometheus scrape config (APISIX + services)
-└── grafana/
-    └── provisioning/
-        ├── datasources/
-        │   └── prometheus.yml     # Auto-provision Prometheus as Grafana data source
-        └── dashboards/
-            ├── apisix-dashboard.json        # APISIX gateway monitoring dashboard
-            └── services-monitoring.json     # Flask services monitoring dashboard
-```
-
-------------------------------------------------------------------------
-
-## 💾 **Persistent Storage**
-
-Metrics and configuration data are persisted in Docker volumes:
-
-- **`prometheus_data`** — Prometheus time-series database
-- **`grafana_data`** — Grafana dashboards and configuration
-- **`etcd_data`** — APISIX configuration store
-
-Data survives container restarts.
-
-------------------------------------------------------------------------
-
-## 🎯 **Available Endpoints**
-
-### **API Gateway (APISIX)**
-
-- **Admin API**: `http://localhost:9180/` (API key required)
-- **Dashboard**: `http://localhost:9000/` (admin:admin)
-- **Gateway**: `http://localhost:9080/` (public)
-  - POST `/users` → users service
-  - POST `/products` → products service
-  - POST `/orders` → orders service
-
-### **Microservices** (direct, bypassing gateway)
-
-- **Users**: `http://localhost:5001/` (with `/metrics`)
-- **Products**: `http://localhost:5002/` (with `/metrics`)
-- **Orders**: `http://localhost:5003/` (with `/metrics`)
-
-### **Database**
-
-- **PostgreSQL**: `localhost:5432` (postgres:password)
-
-### **Monitoring**
-
-- **Prometheus**: `http://localhost:9090/`
-- **Grafana**: `http://localhost:3000/` (admin:admin)
-
-------------------------------------------------------------------------
-
-## 🔍 **Common PromQL Queries**
-
-Use these in Prometheus (http://localhost:9090) or Grafana to create custom visualizations:
-
-```promql
-# Requests per second by service
-sum(rate(flask_http_requests_total[1m])) by (service)
-
-# Error rate (4xx + 5xx) per service
-sum(rate(flask_http_requests_total{http_status=~"(4|5).."}[1m])) by (service)
-
-# P95 request latency
-histogram_quantile(0.95, sum(rate(flask_request_latency_seconds_bucket[5m])) by (le, service))
-
-# P99 request latency
-histogram_quantile(0.99, sum(rate(flask_request_latency_seconds_bucket[5m])) by (le, service))
-
-# Request count by endpoint
-sum(increase(flask_http_requests_total[5m])) by (endpoint, service)
-
-# Active APISIX connections
-apisix_nginx_http_current_connections{state="active"}
-
-# Total requests (all services)
-sum(increase(flask_http_requests_total[5m]))
-```
-
-------------------------------------------------------------------------
-
-## 🚀 **Production Checklist**
-
-- [ ] Change APISIX API key from default (`edd1c9f034335f136f87ad84b625c8f1`)
-- [ ] Change Grafana admin password from default (`admin`)
-- [ ] Change PostgreSQL password from default (`password`)
-- [ ] Configure persistent volumes for production storage
-- [ ] Set up log aggregation (ELK, Loki, Splunk, etc.)
-- [ ] Enable HTTPS/TLS for all services
-- [ ] Configure alerting rules in Prometheus/Grafana
-- [ ] Set resource limits in `docker-compose.yml`
-- [ ] Enable rate limiting across all routes
-- [ ] Monitor and set up backups for PostgreSQL
-
-------------------------------------------------------------------------
-
-## 📚 **Technology Stack**
-
-| Component | Purpose | Technology |
-|-----------|---------|-----------|
-| API Gateway | Request routing, rate limiting, Prometheus export | Apache APISIX 3.14+ |
-| Microservices | Business logic | Flask 2.3 + SQLAlchemy |
-| Database | Persistent data | PostgreSQL 15 |
-| Metrics Collection | Time-series metrics | Prometheus |
-| Metrics Visualization | Live dashboards | Grafana |
-| Instrumentation | Service metrics | prometheus_client 0.16 |
-| Configuration | Service discovery | etcd 3.4 |
-| Orchestration | Container management | Docker Compose |
-
-------------------------------------------------------------------------
-
-## 🎯 **Project Summary**
-
-You now have:
-
-- **3 Flask microservices** (users, products, orders) with **Prometheus instrumentation**
-- **1 PostgreSQL database** with auto-created tables
-- **Apache APISIX** API Gateway with rate limiting and Prometheus metrics
-- **Prometheus** collecting metrics from APISIX + all three services
-- **Grafana** with **two pre-built dashboards** for monitoring
-- **Full observability** with request rates, latencies (p95/p99), error rates, and status codes
-- **Docker Compose** orchestrating everything
-
-Everything is aligned for a complete **distributed systems + networking university project** with **production-ready monitoring & observability**.
-
-------------------------------------------------------------------------
-
-Made with ❤️ by **Shazan**, **Zain**, **Abdul Wasay**
+Made with ❤️ by **Shazan**, **Kashan**

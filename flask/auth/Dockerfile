@@ -3,9 +3,12 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Copy service-specific requirements
-COPY flask/orders/requirements.txt /app/requirements.txt
+COPY flask/auth/requirements.txt /app/requirements.txt
+
+# Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY flask/orders/app.py /app/
+# Copy ONLY this microservice's code
+COPY flask/auth/app.py /app/
 
 CMD ["python", "app.py"]

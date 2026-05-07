@@ -1,4 +1,4 @@
-FROM python:3.10
+FROM python:3.11-slim
 
 WORKDIR /app
 
@@ -6,9 +6,9 @@ WORKDIR /app
 COPY flask/users/requirements.txt /app/requirements.txt
 
 # Install dependencies
-RUN pip install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy ONLY this microservice’s code
+# Copy ONLY this microservice's code
 COPY flask/users/app.py /app/
 
 CMD ["python", "app.py"]

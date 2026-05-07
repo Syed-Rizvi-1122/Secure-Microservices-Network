@@ -16,11 +16,13 @@ services:
     restart: always
     volumes:
       - ./apisix_conf/config.yaml:/usr/local/apisix/conf/config.yaml
+      - ./certs:/certs:ro
     depends_on:
       - etcd
       - users
       - products
       - orders
+      - auth
       - prometheus
       - grafana
     ports:
@@ -61,6 +63,16 @@ services:
     networks:
       - apisix
 
+  redis:
+    image: redis:7-alpine
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - apisix
+
   users:
     build:
       context: .
@@ -68,10 +80,22 @@ services:
     restart: always
     environment:
       DATABASE_URL: postgresql://postgres:password@db:5432/ecommerce
+      SERVICE_NAME: users
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      IDS_WINDOW: "60"
+      IDS_THRESHOLD: "80"
+      IDS_BLOCK_AT: "120"
+      APISIX_ADMIN_URL: http://apisix:9180
+      APISIX_API_KEY: edd1c9f034335f136f87ad84b625c8f1
     ports:
       - "5001:5000"
     depends_on:
       - db
+      - redis
+    volumes:
+      - ./certs:/certs:ro
+      - ./ids:/ids:ro
     networks:
       - apisix
 
@@ -82,10 +106,22 @@ services:
     restart: always
     environment:
       DATABASE_URL: postgresql://postgres:password@db:5432/ecommerce
+      SERVICE_NAME: products
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      IDS_WINDOW: "60"
+      IDS_THRESHOLD: "80"
+      IDS_BLOCK_AT: "120"
+      APISIX_ADMIN_URL: http://apisix:9180
+      APISIX_API_KEY: edd1c9f034335f136f87ad84b625c8f1
     ports:
       - "5002:5000"
     depends_on:
       - db
+      - redis
+    volumes:
+      - ./certs:/certs:ro
+      - ./ids:/ids:ro
     networks:
       - apisix
 
@@ -96,10 +132,38 @@ services:
     restart: always
     environment:
       DATABASE_URL: postgresql://postgres:password@db:5432/ecommerce
+      SERVICE_NAME: orders
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      IDS_WINDOW: "60"
+      IDS_THRESHOLD: "80"
+      IDS_BLOCK_AT: "120"
+      APISIX_ADMIN_URL: http://apisix:9180
+      APISIX_API_KEY: edd1c9f034335f136f87ad84b625c8f1
     ports:
       - "5003:5000"
     depends_on:
       - db
+      - redis
+    volumes:
+      - ./certs:/certs:ro
+      - ./ids:/ids:ro
+    networks:
+      - apisix
+
+  auth:
+    build:
+      context: .
+      dockerfile: flask/auth/Dockerfile
+    restart: always
+    environment:
+      JWT_SECRET: nps-project-secret-2026
+      TOKEN_TTL_SECONDS: "3600"
+      SERVICE_NAME: auth
+    ports:
+      - "5004:5000"
+    volumes:
+      - ./certs:/certs:ro
     networks:
       - apisix
 
@@ -109,6 +173,7 @@ services:
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus_data:/prometheus
+      - ./certs:/certs:ro
     ports:
       - "9090:9090"
     command:
@@ -145,4 +210,6 @@ volumes:
   prometheus_data:
     driver: local
   grafana_data:
+    driver: local
+  redis_data:
     driver: local

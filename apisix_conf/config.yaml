@@ -2,6 +2,12 @@ apisix:
   node_listen: 9080
   enable_ipv6: false
 
+  ssl:
+    listen:
+      - port: 9443
+    ssl_protocols: "TLSv1.2 TLSv1.3"
+    ssl_trusted_certificate: /certs/ca.crt
+
   enable_control: true
   control:
     ip: "0.0.0.0"
