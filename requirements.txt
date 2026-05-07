@@ -9,3 +9,7 @@ python-dotenv==1.0.1
 requests==2.32.3          # Optional, but useful for service-to-service calls
 gunicorn==22.0.0          # Production server inside docker
 flask_sqlalchemy==3.0.5
+
+# Attack scripts (WSL-side dependencies)
+scapy==2.5.0              # SYN flood simulation (requires sudo)
+PyJWT==2.8.0              # JWT token decoding for demo

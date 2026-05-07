@@ -84,11 +84,11 @@ The system implements a **defence-in-depth** security model across multiple laye
 | **openssl** (in WSL) | Any |
 | **Python 3** (in WSL, for attack scripts) | 3.8+ |
 
-Set up the Python virtual environment for attack scripts:
+Set up the Python virtual environment and install dependencies from `requirements.txt`:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install requests==2.31.0 scapy==2.5.0 PyJWT==2.8.0
+pip install -r requirements.txt
 ```
 
 ---
