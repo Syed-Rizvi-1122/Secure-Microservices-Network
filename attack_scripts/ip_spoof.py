@@ -73,7 +73,7 @@ def main():
     print()
     print(f"═══════════════════════════════════════════")
     print(f"  IP Spoofing simulation complete.")
-    print(f"  Check IDS logs: docker logs <users-container>")
+    print(f"  Check IDS logs: docker logs secure-microservices-network-users-1")
     print(f"  Check Grafana:  http://localhost:3000")
     print(f"═══════════════════════════════════════════")
 

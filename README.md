@@ -325,8 +325,8 @@ python3 attack_scripts/ip_spoof.py --count 5
 ```
 **Expected:**
 - 5 requests with forged IP headers from private/test ranges
-- Each line shows the forged IP and HTTP status code
-- After running this, IDS logs will show spoofing detection warnings
+- Each line shows the forged IP and HTTP status code (HTTP `401` — the gateway rejects them because no JWT token is included, which is expected for an external attack simulation)
+- The IDS detects spoofing on *all* gateway-forwarded traffic (see D1 below)
 
 #### C3. SYN Flood Attack (requires sudo)
 
@@ -363,21 +363,38 @@ The **static firewall** pre-blocks known-bad CIDR ranges at the gateway using AP
 
 **Course relevance:** Week 14 (Firewalls, IDS/IPS, Proxy Servers)
 
-#### D1. Verify IDS detects the IP spoofing attack
+#### D1. Verify IDS detects IP spoofing
 
-After running the attack scripts (Module C), check the Flask service logs:
+The IDS middleware runs inside each Flask service and inspects *every* inbound request. When APISIX forwards a request, it adds the client's real IP to `X-Forwarded-For`. Since requests originate from the Docker host, this IP is `172.18.0.x` — a private range (`172.16.0.0/12`) that the IDS flags as potentially spoofed. This means every authenticated request through the gateway produces IDS detection logs.
+
+Check the Flask service logs:
 
 ```bash
 docker logs secure-microservices-network-users-1 2>&1 | grep -E "\[IDS\]|\[IPS\]" | tail -10
 ```
-**Expected:** `[IDS] WARNING` lines showing "IP spoofing detected" with the forged IP range.
+**Expected:** `[IDS] WARNING` lines showing "IP spoofing detected" with the Docker gateway IP range (`172.16.0.0/12`). These entries prove the IDS middleware is actively inspecting every request's headers.
 
 #### D2. Verify Redis stores IDS sliding-window counters
 
+> **⏱️ Timing note:** IDS keys use a 60-second sliding window with a 70-second TTL. You must check Redis **within 70 seconds** of the last request, otherwise the keys will have expired. Run the commands below together:
+
 ```bash
+# Send an authenticated request so the IDS records it in Redis
+curl -s http://localhost:9080/users -H "Authorization: Bearer $TOKEN" > /dev/null
+
+# Immediately check Redis (must be within 70 seconds)
 docker exec secure-microservices-network-redis-1 redis-cli keys "ids:*"
 ```
-**Expected:** Keys matching `ids:rate:<ip>` and `ids:ep:<ip>:<path>` — these are the sliding-window sorted sets.
+**Expected:** Keys matching `ids:rate:<ip>` and `ids:ep:<ip>:<path>` — these are the sliding-window sorted sets. For example:
+```
+ids:rate:172.18.0.12
+ids:ep:172.18.0.12:/users
+```
+
+You can also inspect the TTL to see the countdown:
+```bash
+docker exec secure-microservices-network-redis-1 redis-cli ttl "ids:rate:172.18.0.12"
+```
 
 #### D3. Verify static firewall CIDRs are configured
 
@@ -417,10 +434,13 @@ for i in $(seq 1 130); do
   curl -s http://localhost:9080/users -H "Authorization: Bearer $TOKEN" > /dev/null
 done
 
-# Check if the IP was auto-blocked
+# Check IMMEDIATELY — the blocklist key persists, but check right after the loop
 docker exec secure-microservices-network-redis-1 redis-cli smembers ids:global:blocklist
 ```
-**Expected:** The source IP appears in the Redis blocklist. Check logs for `[IPS] Blocked IP ...` messages.
+**Expected:** The source IP (e.g., `172.18.0.12`) appears in the Redis blocklist. Check logs for `[IPS] Blocked IP ...` messages:
+```bash
+docker logs secure-microservices-network-users-1 2>&1 | grep "\[IPS\]" | tail -5
+```
 
 ---
 
