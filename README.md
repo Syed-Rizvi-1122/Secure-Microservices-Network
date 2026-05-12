@@ -365,14 +365,24 @@ The **static firewall** pre-blocks known-bad CIDR ranges at the gateway using AP
 
 #### D1. Verify IDS detects IP spoofing
 
-The IDS middleware runs inside each Flask service and inspects *every* inbound request. When APISIX forwards a request, it adds the client's real IP to `X-Forwarded-For`. Since requests originate from the Docker host, this IP is `172.18.0.x` — a private range (`172.16.0.0/12`) that the IDS flags as potentially spoofed. This means every authenticated request through the gateway produces IDS detection logs.
+The IDS middleware runs inside each Flask service and inspects *every* inbound request that **reaches Flask**. Note that the attack scripts from Module C (ip_spoof.py, brute_force.py) send requests **without a JWT token**, so APISIX rejects them with HTTP 401 at the gateway — they never reach Flask and therefore never trigger IDS logs.
 
-Check the Flask service logs:
+However, when APISIX forwards **authenticated** requests, it adds the client's real IP to `X-Forwarded-For`. Since requests originate from the Docker host, this IP is `172.18.0.x` — a private range (`172.16.0.0/12`) that the IDS flags as potentially spoofed. This demonstrates the IDS inspecting real traffic.
+
+First, send a few authenticated requests to generate IDS logs:
+
+```bash
+for i in {1..5}; do
+  curl -s http://localhost:9080/users -H "Authorization: Bearer $TOKEN" > /dev/null
+done
+```
+
+Then check the Flask service logs:
 
 ```bash
 docker logs secure-microservices-network-users-1 2>&1 | grep -E "\[IDS\]|\[IPS\]" | tail -10
 ```
-**Expected:** `[IDS] WARNING` lines showing "IP spoofing detected" with the Docker gateway IP range (`172.16.0.0/12`). These entries prove the IDS middleware is actively inspecting every request's headers.
+**Expected:** `[IDS] WARNING` lines showing "IP spoofing detected" with the Docker gateway IP range (`172.16.0.0/12`). These entries prove the IDS middleware is actively inspecting every forwarded request's headers.
 
 #### D2. Verify Redis stores IDS sliding-window counters
 
