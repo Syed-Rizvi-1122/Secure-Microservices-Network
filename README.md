@@ -251,7 +251,7 @@ This is the proof of non-repudiation — every request is permanently linked to 
 
 ```bash
 # Make requests as alice and bob
-for i in {1..5}; do
+for i in {1..30}; do
   curl -s http://localhost:9080/users -H "Authorization: Bearer $TOKEN" > /dev/null
 done
 
@@ -259,7 +259,7 @@ BOB_TOKEN=$(curl -s -X POST http://localhost:9080/auth/token \
   -H 'Content-Type: application/json' \
   -d '{"username":"bob","password":"securepass"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
 
-for i in {1..5}; do
+for i in {1..30}; do
   curl -s http://localhost:9080/products -H "Authorization: Bearer $BOB_TOKEN" > /dev/null
 done
 
@@ -321,19 +321,19 @@ python3 attack_scripts/brute_force.py
 #### C2. IP Spoofing Attack
 
 ```bash
-python3 attack_scripts/ip_spoof.py --count 5
+python3 attack_scripts/ip_spoof.py --count 20
 ```
 **Expected:**
-- 5 requests with forged IP headers from private/test ranges
+- 20 requests with forged IP headers from private/test ranges
 - Each line shows the forged IP and HTTP status code (HTTP `401` — the gateway rejects them because no JWT token is included, which is expected for an external attack simulation)
 - The IDS detects spoofing on *all* gateway-forwarded traffic (see D1 below)
 
 #### C3. SYN Flood Attack (requires sudo)
 
 ```bash
-sudo python3 attack_scripts/syn_flood.py --count 50
+sudo python3 attack_scripts/syn_flood.py --count 1000
 ```
-**Expected:** 50 SYN packets sent with randomised source IPs, progress every 50 packets.
+**Expected:** 1000 SYN packets sent with randomised source IPs, progress every 50 packets.
 
 > **Note:** SYN packets operate below the HTTP layer, so they won't appear in Grafana's HTTP metrics. This is expected — the attack demonstrates a transport-layer concept.
 
@@ -372,7 +372,7 @@ However, when APISIX forwards **authenticated** requests, it adds the client's r
 First, send a few authenticated requests to generate IDS logs:
 
 ```bash
-for i in {1..5}; do
+for i in {1..30}; do
   curl -s http://localhost:9080/users -H "Authorization: Bearer $TOKEN" > /dev/null
 done
 ```
@@ -481,10 +481,10 @@ Path:  Dashboards → Flask Services Monitoring
 4. **Total Requests by Service** — pie chart breakdown
 
 **New 4 panels (security modules):**
-5. **IDS/IPS — Rate-Limited Requests** — stat panel showing HTTP 429 count (attack indicator)
+5. **IDS/IPS — Auth Failures (Attack Indicator)** — stat panel showing failed auth attempts (brute-force indicator)
 6. **Auth — Token Success vs Failure Rate** — timeseries (green=200, red=401) showing brute-force impact
 7. **Requests by JWT Subject (Non-Repudiation)** — pie chart showing request distribution per authenticated user
-8. **Error Rate 4xx+5xx (Attack Indicator)** — timeseries showing error spikes by service during attacks
+8. **Auth Error Rate (Attack Indicator)** — timeseries comparing auth 401s (red) vs 200s (green) over time
 
 #### Verify Prometheus targets
 
