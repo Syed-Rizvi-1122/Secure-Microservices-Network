@@ -208,7 +208,7 @@ curl -s -o /dev/null -w "%{http_code}" http://localhost:9080/users
 ```
 **Expected:** `401` — The gateway's `jwt-auth` plugin rejects requests without a valid token.
 
-#### B3. Access protected endpoints with a valid token
+#### B3. Create data through the gateway
 
 ```bash
 # Store token in a variable
@@ -216,16 +216,6 @@ TOKEN=$(curl -s -X POST http://localhost:9080/auth/token \
   -H 'Content-Type: application/json' \
   -d '{"username":"alice","password":"password123"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
 
-# Use token to access protected endpoints
-curl -s http://localhost:9080/users -H "Authorization: Bearer $TOKEN"
-curl -s http://localhost:9080/products -H "Authorization: Bearer $TOKEN"
-curl -s http://localhost:9080/orders -H "Authorization: Bearer $TOKEN"
-```
-**Expected:** HTTP 200 with JSON data from each service.
-
-#### B4. Create data through the gateway
-
-```bash
 # Create a user
 curl -s -X POST http://localhost:9080/users \
   -H "Authorization: Bearer $TOKEN" \
@@ -244,6 +234,17 @@ curl -s -X POST http://localhost:9080/orders \
   -H "Content-Type: application/json" \
   -d '{"user_id":1,"product_id":1,"quantity":2}'
 ```
+**Expected:** HTTP 201 with creation success messages.
+
+#### B4. Access protected endpoints with a valid token
+
+```bash
+# Use token to read the newly created data
+curl -s http://localhost:9080/users -H "Authorization: Bearer $TOKEN"
+curl -s http://localhost:9080/products -H "Authorization: Bearer $TOKEN"
+curl -s http://localhost:9080/orders -H "Authorization: Bearer $TOKEN"
+```
+**Expected:** HTTP 200 with populated JSON data from each service.
 
 #### B5. Verify non-repudiation (subject label in Prometheus)
 
