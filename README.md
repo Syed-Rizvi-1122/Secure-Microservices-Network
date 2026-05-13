@@ -480,19 +480,49 @@ Login: admin / admin
 Path:  Dashboards → Flask Services Monitoring
 ```
 
-#### 8 Dashboard Panels
+#### 8 Unified Dashboard Panels
 
-**Original 4 panels (baseline application metrics):**
-1. **Service Requests Per Second** — line chart of request throughput
-2. **Service Request Latency (p95, p99)** — latency percentiles
-3. **HTTP Status Codes by Service** — distribution of response codes
-4. **Total Requests by Service** — pie chart breakdown
+The dashboard provides a complete, unified view of both application performance and network security. Here is exactly what each panel monitors:
 
-**New 4 panels (security modules):**
-5. **IDS/IPS — Auth Failures (Attack Indicator)** — stat panel showing failed auth attempts (brute-force indicator)
-6. **Auth — Token Success vs Failure Rate** — timeseries (green=200, red=401) showing brute-force impact
-7. **Requests by JWT Subject (Non-Repudiation)** — pie chart showing request distribution per authenticated user
-8. **Auth Error Rate (Attack Indicator)** — timeseries comparing auth 401s (red) vs 200s (green) over time
+**1. Service Requests Per Second**
+* **PromQL:** `sum(rate(flask_http_requests_total[1m])) by (service)`
+* **Technical:** Measures the live throughput (RPS) of the system, grouped by microservice, using a 1-minute rolling rate.
+* **Non-Technical:** Shows exactly how busy the platform is right now. It tells us whether traffic is currently flowing smoothly or flatlining.
+
+**2. Service Request Latency (p95, p99)**
+* **PromQL:** `histogram_quantile(0.95, sum(rate(flask_request_latency_seconds_bucket[5m])) by (le, service))`
+* **Technical:** Calculates the 95th percentile response times using Prometheus histograms to track SLA compliance.
+* **Non-Technical:** Measures real user experience. It guarantees that 95% of customers are experiencing fast, snappy load times and highlights if a specific service is lagging.
+
+**3. HTTP Status Codes by Service**
+* **PromQL:** `sum(increase(flask_http_requests_total{http_status=~"2.."}[5m])) by (service)`
+* **Technical:** Tracks the distribution of successful (2xx) versus failed (4xx/5xx) HTTP responses over a 5-minute window.
+* **Non-Technical:** Highlights system stability. A green bar means operations are succeeding, while red means the server is crashing or failing to handle requests.
+
+**4. Total Requests by Service**
+* **PromQL:** `sum(increase(flask_http_requests_total[5m])) by (service)`
+* **Technical:** Aggregates the absolute volume of traffic handled by each upstream Docker container.
+* **Non-Technical:** Shows a pie-chart breakdown of which part of the business is most popular (e.g., are people browsing products or placing orders?).
+
+**5. IDS/IPS — Auth Failures (Attack Indicator)**
+* **PromQL:** `sum(increase(auth_requests_total{status="401"}[5m]))`
+* **Technical:** Tracks the absolute volume of unauthorized (HTTP 401) requests rejected by the gateway.
+* **Non-Technical:** Acts as our Intrusion Detection early-warning system. A sudden, massive number here immediately flags an active brute-force or credential stuffing attack.
+
+**6. Auth — Token Success vs Failure Rate**
+* **PromQL:** `sum(rate(auth_requests_total{status="200"}[1m]))` *(vs 401)*
+* **Technical:** Compares the rate of successful authentications against the rate of cryptographic rejections.
+* **Non-Technical:** Shows the tug-of-war between legitimate users successfully logging in versus hackers attempting to guess passwords.
+
+**7. Requests by JWT Subject (Non-Repudiation)**
+* **PromQL:** `sum(increase(flask_http_requests_total[5m])) by (subject)`
+* **Technical:** Groups all backend traffic by the `subject` label, which is securely extracted from the JWT payload at the APISIX gateway.
+* **Non-Technical:** Provides absolute cryptographic proof of accountability (Non-Repudiation). It proves exactly which human being performed an action, and they cannot deny it.
+
+**8. Auth Error Rate (Attack Indicator)**
+* **PromQL:** `sum(rate(auth_requests_total{status="401"}[1m]))`
+* **Technical:** A timeseries visualization of gateway-level 401 rejections over time.
+* **Non-Technical:** Visually maps out the timeline of an attack. It allows security teams to see exactly when an automated attack started, peaked, and was mitigated.
 
 #### Verify Prometheus targets
 
