@@ -338,6 +338,14 @@ sudo python3 attack_scripts/syn_flood.py --count 1000
 
 > **Note:** SYN packets operate below the HTTP layer, so they won't appear in Grafana's HTTP metrics. This is expected — the attack demonstrates a transport-layer concept.
 
+**To prove the attack was stopped by the server:**
+Because the packets never complete a TCP handshake, the operating system kernel steps in and drops them when the socket listen queue overflows. You can prove the OS successfully defended the server by checking the kernel's `ListenDrops` counter:
+
+```bash
+awk 'NR==1 {for(i=1;i<=NF;i++) if($i=="ListenDrops") col=i} NR==2 {print "Kernel Listen Drops (SYN Packets rejected):", $col}' /proc/net/netstat
+```
+*Run this before and after the attack to show the counter increasing by exactly the number of attack packets!*
+
 #### C3b. Verify graceful no-root handling
 
 ```bash
