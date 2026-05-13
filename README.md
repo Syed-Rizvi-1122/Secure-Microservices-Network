@@ -435,8 +435,7 @@ print(f'Blocked CIDRs: {bl}')
 
 ```bash
 for i in $(seq 1 105); do
-  CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:9080/users \
-    -H "Authorization: Bearer $TOKEN")
+  CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:9080/auth/verify)
   if [ "$CODE" == "429" ]; then
     echo "Rate limited at request $i (HTTP 429)"
     break

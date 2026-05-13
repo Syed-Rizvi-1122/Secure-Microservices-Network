@@ -56,7 +56,7 @@ done
 # --- STEP 3: Public Auth Routes ---
 echo ""
 echo "[Step 3/6] Registering public auth routes..."
-RATE='{"count":200,"time_window":60,"rejected_code":429,"key":"remote_addr","policy":"local"}'
+RATE='{"count":100,"time_window":60,"rejected_code":429,"key":"remote_addr","policy":"local"}'
 
 api_call PUT "/apisix/admin/routes/auth_token" \
   "{\"name\":\"auth_token\",\"uri\":\"/auth/token\",\"methods\":[\"POST\"],\"upstream_id\":\"auth_upstream\",\"plugins\":{\"limit-count\":${RATE}}}" \
