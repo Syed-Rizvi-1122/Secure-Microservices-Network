@@ -266,7 +266,7 @@ done
 
 # Wait for Prometheus to scrape, then query
 sleep 10
-curl -s 'http://localhost:9090/api/v1/query?query=flask_http_requests_total{subject=~"alice|bob"}' | python3 -c "
+curl -s -G --data-urlencode 'query=flask_http_requests_total{subject=~"alice|bob"}' http://localhost:9090/api/v1/query | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
 for r in data.get('data',{}).get('result',[]):
